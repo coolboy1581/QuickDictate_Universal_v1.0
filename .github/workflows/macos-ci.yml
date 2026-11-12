@@ -1,0 +1,52 @@
+name: macOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+          python3 --version
+      - name: Run official Swift Package XCTest suite
+        run: swift test
+      - name: Run standalone compatibility harness
+        run: bash Scripts/run_standalone_tests.sh
+      - name: Build Universal 2 .app without duplicating tests
+        env:
+          RUN_TESTS: '0'
+        run: bash Scripts/build_universal_app.sh
+      - name: Check architectures, signature, and plist
+        run: |
+          lipo -info build/QuickDictate.app/Contents/MacOS/QuickDictate | tee /tmp/qd_arches.txt
+          grep -q x86_64 /tmp/qd_arches.txt
+          grep -q arm64 /tmp/qd_arches.txt
+          codesign --verify --verbose=2 build/QuickDictate.app
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/QuickDictate.app/Contents/Info.plist | grep -qx 'com.github.quickdictate'
+          test -s build/QuickDictate.app/Contents/Resources/AppIcon.icns
+      - name: Package test DMG and verify
+        run: |
+          bash Scripts/create_dmg.sh build/QuickDictate-CI-Unsigned.dmg
+          hdiutil verify build/QuickDictate-CI-Unsigned.dmg
+          shasum -a 256 build/QuickDictate-CI-Unsigned.dmg | tee build/SHA256SUMS.txt
+      - name: Upload CI DMG artifact (not a signed release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuickDictate-CI-Unsigned
+          path: |
+            build/QuickDictate-CI-Unsigned.dmg
+            build/SHA256SUMS.txt

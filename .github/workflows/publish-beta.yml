@@ -1,0 +1,54 @@
+name: Publish QuickDictate beta
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    # Publish only for the designated reviewed release commit.
+    if: github.event.head_commit.message == 'Release QuickDictate v2.0.0-beta.1'
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@v4
+      - name: Verify toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+          python3 --version
+      - name: Run official XCTest suite
+        run: swift test
+      - name: Run standalone regression test harness
+        run: bash Scripts/run_standalone_tests.sh
+      - name: Compile and verify Universal 2 beta
+        env:
+          RUN_TESTS: '0'
+        run: bash Scripts/build_universal_app.sh
+      - name: Verify binary and identity
+        run: |
+          lipo -info build/QuickDictate.app/Contents/MacOS/QuickDictate | tee /tmp/qd_lipo.txt
+          grep -q x86_64 /tmp/qd_lipo.txt
+          grep -q arm64 /tmp/qd_lipo.txt
+          codesign --verify --verbose=2 build/QuickDictate.app
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/QuickDictate.app/Contents/Info.plist | grep -qx 'com.github.quickdictate'
+      - name: Create beta installer and checksum
+        run: |
+          bash Scripts/create_dmg.sh build/QuickDictate_v2.0.0-beta.1_Unsigned.dmg
+          hdiutil verify build/QuickDictate_v2.0.0-beta.1_Unsigned.dmg
+          ( cd build && shasum -a 256 QuickDictate_v2.0.0-beta.1_Unsigned.dmg > SHA256SUMS.txt )
+      - name: Attach downloadable DMG to GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v2.0.0-beta.1 \
+            build/QuickDictate_v2.0.0-beta.1_Unsigned.dmg \
+            build/SHA256SUMS.txt \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title 'QuickDictate v2.0.0-beta.1 (unsigned macOS beta)' \
+            --notes-file RELEASE_NOTES.md
